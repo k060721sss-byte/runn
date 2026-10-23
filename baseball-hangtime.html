@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>야구공 체공시간 테스터</title>
+
+<style>
+  /* ===== 화면 모양(디자인) 설정 ===== */
+  body {
+    font-family: 'Malgun Gothic', sans-serif;
+    background: #0f172a;
+    color: #f1f5f9;
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 16px;
+    text-align: center;
+    user-select: none;              /* 연타해도 글자가 선택되지 않게 */
+  }
+  h1 { font-size: 22px; }
+  #time {                           /* 큰 스톱워치 숫자 */
+    font-size: 72px;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;  /* 숫자 폭을 고정해서 떨리지 않게 */
+    margin: 8px 0;
+  }
+  #sub { color: #94a3b8; min-height: 22px; margin-bottom: 12px; }
+  button {
+    width: 100%;
+    font-size: 28px;
+    font-weight: bold;
+    padding: 28px;
+    border: none;
+    border-radius: 16px;
+    color: white;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    touch-action: manipulation;     /* 모바일에서 누르는 즉시 반응 */
+  }
+  button:active { transform: translateY(3px); }
+  .ready   { background: linear-gradient(135deg, #00e676, #00b0ff); }   /* 시작 (초록→하늘) */
+  .running { background: linear-gradient(135deg, #ff3d77, #ff9a00); }   /* 정지 (핑크→주황) */
+  .stats { display: flex; gap: 8px; margin: 16px 0; }
+  .stat { flex: 1; background: #1e293b; border-radius: 12px; padding: 10px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { font-size: 12px; color: #94a3b8; }
+  .card { background: #1e293b; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { border-bottom: 1px solid #334155; padding: 6px; }
+  .small { font-size: 12px; padding: 3px 8px; width: auto; border-radius: 6px; background: #475569; box-shadow: none; }
+  .clear { font-size: 14px; padding: 8px; background: #475569; margin-top: 10px; }
+  .note { font-size: 12px; color: #94a3b8; }
+</style>
+</head>
+
+<body>
+  <h1>⚾ 야구공 체공시간 테스터</h1>
+
+  <!-- 스톱워치 숫자 (초 단위, 소수점 둘째 자리까지) -->
+  <div id="time">0.00</div>
+  <div id="sub">공을 던지는 순간 버튼을 누르세요</div>
+
+  <!-- 시작/정지를 하나의 큰 버튼으로 처리 (스페이스바도 가능) -->
+  <button id="mainBtn" class="ready">던졌다! 시작</button>
+
+  <!-- 평균·최고·횟수 -->
+  <div class="stats">
+    <div class="stat"><b id="avg">-</b><span>평균(초)</span></div>
+    <div class="stat"><b id="best">-</b><span>최고(초)</span></div>
+    <div class="stat"><b id="num">0</b><span>측정 횟수</span></div>
+  </div>
+
+  <!-- 기록 추이 그래프 -->
+  <div class="card">
+    <h2>기록 추이 그래프</h2>
+    <svg id="chart" viewBox="0 0 300 150" style="width:100%"></svg>
+  </div>
+
+  <!-- 기록 표 -->
+  <div class="card">
+    <h2>기록</h2>
+    <table>
+      <thead><tr><th>회차</th><th>체공시간</th><th>예상 최고높이</th><th></th></tr></thead>
+      <tbody id="records"></tbody>
+    </table>
+    <p id="empty" class="note">아직 기록이 없어요</p>
+    <p class="note">최고높이는 같은 높이에서 던지고 받았다고 가정한 추정값(g×t²÷8)이에요.</p>
+    <button class="clear" id="clearBtn">기록 전체 삭제</button>
+  </div>
+
+<script>
+  const $ = id => document.getElementById(id);   // id로 화면 요소를 찾는 짧은 도우미 함수
+
+  // ===== 데이터 =====
+  let running = false;     // 지금 시간을 재는 중인지
+  let startTime = 0;       // 시작한 순간의 시각 (밀리초)
+  let timerId = null;      // 화면 숫자를 갱신하는 타이머
+  let records = [];        // 저장된 체공시간 목록 (초 단위)
+  try {
+    records = JSON.parse(localStorage.getItem('hangtime-records')) || [];   // 이전 기록 불러오기
+  } catch (e) {
+    records = [];
+  }
+
+  // ===== 예상 최고높이(m): 올라가는 시간 = 체공시간의 절반, h = g × (t/2)² ÷ 2 =====
+  const height = t => 9.8 * t * t / 8;
+
+  // 소수점 둘째 자리까지 문자로 바꾸기 (예: 2.5 → "2.50")
+  const f2 = n => n.toFixed(2);
+
+  // ===== 시작: 버튼을 누르는 즉시 시각을 기록해요 =====
+  function start() {
+    startTime = performance.now();       // 정밀한 현재 시각
+    running = true;
+    $('mainBtn').textContent = '받았다! 정지';
+    $('mainBtn').className = 'running';
+    $('sub').textContent = '측정 중... 공을 잡는 순간 누르세요';
+    // 화면 숫자는 1/60초마다 갱신 (실제 측정값은 시각 차이로 계산해서 정확해요)
+    timerId = setInterval(function () {
+      $('time').textContent = f2((performance.now() - startTime) / 1000);
+    }, 16);
+  }
+
+  // ===== 정지: 시작 시각과의 차이가 곧 체공시간 =====
+  function stop() {
+    const t = (performance.now() - startTime) / 1000;   // 밀리초 → 초
+    running = false;
+    clearInterval(timerId);
+    $('time').textContent = f2(t);
+    $('mainBtn').textContent = '던졌다! 시작';
+    $('mainBtn').className = 'ready';
+    $('sub').textContent = '체공시간 ' + f2(t) + '초 · 예상 최고높이 약 ' + height(t).toFixed(1) + 'm';
+    records.push(t);
+    try { localStorage.setItem('hangtime-records', JSON.stringify(records)); } catch (e) {}
+    render();
+  }
+
+  function toggle() { running ? stop() : start(); }
+
+  // ===== 표/통계/그래프를 다시 그리기 =====
+  function render() {
+    // 통계: 평균, 최고, 횟수
+    $('num').textContent = records.length;
+    if (records.length) {
+      const sum = records.reduce((a, b) => a + b, 0);
+      $('avg').textContent = f2(sum / records.length);
+      $('best').textContent = f2(Math.max(...records));
+    } else {
+      $('avg').textContent = '-';
+      $('best').textContent = '-';
+    }
+
+    // 표: 최근 기록이 위로 오게 뒤집어서 보여줘요
+    $('records').innerHTML = records.map((t, i) =>
+      '<tr><td>' + (i + 1) + '</td><td>' + f2(t) + '초</td><td>' + height(t).toFixed(1) + 'm</td>' +
+      '<td><button class="small" data-i="' + i + '">삭제</button></td></tr>'
+    ).reverse().join('');
+    $('empty').hidden = records.length > 0;
+
+    renderChart();
+  }
+
+  // ===== 그래프: 회차별 체공시간 선 그래프 + 평균선 =====
+  function renderChart() {
+    const svg = $('chart');
+    if (records.length < 2) {
+      svg.innerHTML = '<text x="150" y="80" text-anchor="middle" font-size="12" fill="#94a3b8">기록이 2개 이상이면 그래프가 나와요</text>';
+      return;
+    }
+    const min = Math.min(...records), max = Math.max(...records);
+    const span = (max - min) || 1;                       // 값이 모두 같을 때 0으로 나누는 것 방지
+    const avg = records.reduce((a, b) => a + b, 0) / records.length;
+    const y = v => 120 - ((v - min) / span) * 90;        // 값 → 세로 좌표
+    // 기록이 많으면 최근 20개만 그려요
+    const start = Math.max(0, records.length - 20);
+    const shown = records.slice(start);
+    const pts = shown.map((v, i) => [30 + i * (250 / (shown.length - 1)), y(v)]);
+
+    svg.innerHTML =
+      // 평균선 (점선)
+      '<line x1="30" x2="280" y1="' + y(avg) + '" y2="' + y(avg) + '" stroke="#f59e0b" stroke-dasharray="4"/>' +
+      '<text x="282" y="' + (y(avg) + 3) + '" font-size="8" fill="#f59e0b">평균</text>' +
+      '<polyline points="' + pts.map(p => p.join(',')).join(' ') + '" fill="none" stroke="#38bdf8" stroke-width="2"/>' +
+      pts.map((p, i) =>
+        '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3" fill="#38bdf8"/>' +
+        '<text x="' + p[0] + '" y="' + (p[1] - 7) + '" text-anchor="middle" font-size="8" fill="#f1f5f9">' + f2(shown[i]) + '</text>' +
+        '<text x="' + p[0] + '" y="142" text-anchor="middle" font-size="8" fill="#94a3b8">' + (start + i + 1) + '</text>'
+      ).join('');
+  }
+
+  // ===== 버튼 연결 =====
+  // click 대신 pointerdown을 써서 "누르는 순간" 바로 반응하게 해요 (측정 지연 최소화)
+  $('mainBtn').addEventListener('pointerdown', function (e) { e.preventDefault(); toggle(); });
+
+  // 스페이스바로도 시작/정지 (키를 꾹 눌렀을 때 반복 입력은 무시)
+  document.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' && !e.repeat) { e.preventDefault(); toggle(); }
+  });
+
+  // 표의 삭제 버튼 (표 전체에서 클릭을 한 번에 감지)
+  $('records').onclick = function (e) {
+    if (e.target.dataset.i === undefined) return;
+    records.splice(Number(e.target.dataset.i), 1);
+    try { localStorage.setItem('hangtime-records', JSON.stringify(records)); } catch (err) {}
+    render();
+  };
+
+  // 전체 삭제
+  $('clearBtn').onclick = function () {
+    if (records.length && confirm('모든 기록을 지울까요?')) {
+      records = [];
+      try { localStorage.setItem('hangtime-records', JSON.stringify(records)); } catch (err) {}
+      render();
+    }
+  };
+
+  render();   // 처음 열 때 저장된 기록을 화면에 그려요
+</script>
+</body>
+</html>
