@@ -112,13 +112,13 @@
     <button class="clear" id="clearBtn">기록 전체 삭제</button>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
   const $ = id => document.getElementById(id);   // id로 화면 요소를 찾는 짧은 도우미 함수
 
   // ===== Supabase 설정 (Project Settings → API Keys 에서 복사) =====
-  const SUPABASE_URL = 'https://tjcxzoqtcemynwwozibf.supabase.co';
-  const SUPABASE_KEY = '여기에_anon_또는_publishable_키_붙여넣기';   // service_role / secret 키는 절대 넣지 마세요!
+  const SUPABASE_URL = 'https://iruwrxpyhgivwmvtttla.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_FR33pwOO41DOH0HcBHSGGw_kcQUIeTA';   // service_role / secret 키는 절대 넣지 마세요!
   const keyReady = !SUPABASE_KEY.startsWith('여기에');
   const db = (keyReady && window.supabase) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
   let user = null;         // 로그인한 사용자 (없으면 null = 비로그인, 이 기기에만 저장)
@@ -138,6 +138,7 @@
     try { localStorage.setItem('hangtime-records', JSON.stringify(records.map(r => r.t))); } catch (e) {}
   }
 
+  const dbProblem = () => !keyReady ? 'Supabase 키가 아직 설정되지 않았어요' : 'Supabase 라이브러리를 불러오지 못했어요 (인터넷 연결 확인 후 새로고침)';
   const msg = text => { $('authMsg').textContent = text || ''; };
 
   // ===== 예상 최고높이(m): 올라가는 시간 = 체공시간의 절반, h = g × (t/2)² ÷ 2 =====
@@ -146,13 +147,13 @@
 
   // ===== 로그인 / 회원가입 / 로그아웃 =====
   async function signUp() {
-    if (!db) return msg('Supabase 키가 아직 설정되지 않았어요');
+    if (!db) return msg(dbProblem());
     const { data, error } = await db.auth.signUp({ email: $('email').value.trim(), password: $('password').value });
     if (error) return msg('가입 실패: ' + error.message);
     msg(data.session ? '가입 완료! 로그인됐어요' : '가입 완료! 이메일 인증 후 로그인하세요');
   }
   async function signIn() {
-    if (!db) return msg('Supabase 키가 아직 설정되지 않았어요');
+    if (!db) return msg(dbProblem());
     const { error } = await db.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
     if (error) return msg('로그인 실패: ' + error.message);
     msg('');
@@ -299,7 +300,7 @@
   if (db) {
     db.auth.onAuthStateChange((event, session) => { applyUser(session ? session.user : null); });
   } else {
-    if (!keyReady) msg('※ Supabase 키 설정 전이라 이 기기에만 저장돼요');
+    msg('※ ' + dbProblem() + ' - 지금은 이 기기에만 저장돼요');
     loadLocal();
     render();
   }
