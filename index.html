@@ -51,11 +51,34 @@
   .small { font-size: 12px; padding: 3px 8px; width: auto; border-radius: 6px; background: #b45309; color: #fff; box-shadow: none; }
   .clear { font-size: 14px; padding: 8px; background: #b45309; margin-top: 10px; }
   .note { font-size: 12px; color: #8a6d00; }
+  .auth input { width: 100%; box-sizing: border-box; font-size: 16px; padding: 10px; margin-bottom: 8px; border: 1px solid #e6c200; border-radius: 8px; background: #fffbe0; user-select: text; }
+  .auth .row { display: flex; gap: 8px; }
+  .auth button { font-size: 16px; padding: 12px; background: #b45309; box-shadow: none; border-radius: 10px; }
+  .auth .alt { background: #d97706; }
+  #authMsg { font-size: 13px; color: #8a6d00; min-height: 18px; margin-top: 8px; }
 </style>
 </head>
 
 <body>
   <h1>⚾ 야구공 체공시간 테스터</h1>
+
+  <!-- 로그인 영역 (Supabase) -->
+  <div class="card auth" id="authCard">
+    <h2 id="authTitle">로그인하면 기록이 계정에 저장돼요</h2>
+    <div id="loggedOut">
+      <input id="email" type="email" placeholder="이메일 (아이디로 사용)" autocomplete="email">
+      <input id="password" type="password" placeholder="비밀번호 (6자 이상)" autocomplete="current-password">
+      <div class="row">
+        <button id="loginBtn">로그인</button>
+        <button id="signupBtn" class="alt">회원가입</button>
+      </div>
+    </div>
+    <div id="loggedIn" hidden>
+      <div id="whoami" class="note"></div>
+      <button id="logoutBtn">로그아웃</button>
+    </div>
+    <div id="authMsg"></div>
+  </div>
 
   <!-- 스톱워치 숫자 (초 단위, 소수점 둘째 자리까지) -->
   <div id="time">0.00</div>
@@ -89,96 +112,140 @@
     <button class="clear" id="clearBtn">기록 전체 삭제</button>
   </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
   const $ = id => document.getElementById(id);   // id로 화면 요소를 찾는 짧은 도우미 함수
+
+  // ===== Supabase 설정 (Project Settings → API Keys 에서 복사) =====
+  const SUPABASE_URL = 'https://tjcxzoqtcemynwwozibf.supabase.co';
+  const SUPABASE_KEY = '여기에_anon_또는_publishable_키_붙여넣기';   // service_role / secret 키는 절대 넣지 마세요!
+  const keyReady = !SUPABASE_KEY.startsWith('여기에');
+  const db = (keyReady && window.supabase) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+  let user = null;         // 로그인한 사용자 (없으면 null = 비로그인, 이 기기에만 저장)
 
   // ===== 데이터 =====
   let running = false;     // 지금 시간을 재는 중인지
   let startTime = 0;       // 시작한 순간의 시각 (밀리초)
   let timerId = null;      // 화면 숫자를 갱신하는 타이머
-  let records = [];        // 저장된 체공시간 목록 (초 단위)
-  try {
-    records = JSON.parse(localStorage.getItem('hangtime-records')) || [];   // 이전 기록 불러오기
-  } catch (e) {
-    records = [];
+  let records = [];        // 체공시간 목록: { id, t(초) }  (id는 DB 번호, 비로그인이면 null)
+  function loadLocal() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('hangtime-records')) || [];
+      records = raw.map(t => ({ id: null, t: t }));
+    } catch (e) { records = []; }
   }
+  function saveLocal() {
+    try { localStorage.setItem('hangtime-records', JSON.stringify(records.map(r => r.t))); } catch (e) {}
+  }
+
+  const msg = text => { $('authMsg').textContent = text || ''; };
 
   // ===== 예상 최고높이(m): 올라가는 시간 = 체공시간의 절반, h = g × (t/2)² ÷ 2 =====
   const height = t => 9.8 * t * t / 8;
-
-  // 소수점 둘째 자리까지 문자로 바꾸기 (예: 2.5 → "2.50")
   const f2 = n => n.toFixed(2);
+
+  // ===== 로그인 / 회원가입 / 로그아웃 =====
+  async function signUp() {
+    if (!db) return msg('Supabase 키가 아직 설정되지 않았어요');
+    const { data, error } = await db.auth.signUp({ email: $('email').value.trim(), password: $('password').value });
+    if (error) return msg('가입 실패: ' + error.message);
+    msg(data.session ? '가입 완료! 로그인됐어요' : '가입 완료! 이메일 인증 후 로그인하세요');
+  }
+  async function signIn() {
+    if (!db) return msg('Supabase 키가 아직 설정되지 않았어요');
+    const { error } = await db.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
+    if (error) return msg('로그인 실패: ' + error.message);
+    msg('');
+  }
+  async function signOut() { if (db) await db.auth.signOut(); }
+
+  // 로그인 상태가 바뀔 때마다 화면과 기록을 다시 불러와요
+  async function applyUser(u) {
+    user = u;
+    $('loggedOut').hidden = !!u;
+    $('loggedIn').hidden = !u;
+    $('authTitle').textContent = u ? '내 기록 (계정에 저장 중)' : '로그인하면 기록이 계정에 저장돼요';
+    if (u) {
+      $('whoami').textContent = u.email + ' 로 로그인됨';
+      const { data, error } = await db.from('hangtime_records').select('id, seconds').order('created_at', { ascending: true });
+      if (error) { msg('기록 불러오기 실패: ' + error.message); records = []; }
+      else records = data.map(r => ({ id: r.id, t: Number(r.seconds) }));
+    } else {
+      loadLocal();
+    }
+    render();
+  }
 
   // ===== 시작: 버튼을 누르는 즉시 시각을 기록해요 =====
   function start() {
-    startTime = performance.now();       // 정밀한 현재 시각
+    startTime = performance.now();
     running = true;
     $('mainBtn').textContent = '받았다! 정지';
     $('mainBtn').className = 'running';
     $('sub').textContent = '측정 중... 공을 잡는 순간 누르세요';
-    // 화면 숫자는 1/60초마다 갱신 (실제 측정값은 시각 차이로 계산해서 정확해요)
     timerId = setInterval(function () {
       $('time').textContent = f2((performance.now() - startTime) / 1000);
     }, 16);
   }
 
   // ===== 정지: 시작 시각과의 차이가 곧 체공시간 =====
-  function stop() {
-    const t = (performance.now() - startTime) / 1000;   // 밀리초 → 초
+  async function stop() {
+    const t = (performance.now() - startTime) / 1000;
     running = false;
     clearInterval(timerId);
     $('time').textContent = f2(t);
     $('mainBtn').textContent = '던졌다! 시작';
     $('mainBtn').className = 'ready';
     $('sub').textContent = '체공시간 ' + f2(t) + '초 · 예상 최고높이 약 ' + height(t).toFixed(1) + 'm';
-    records.push(t);
-    try { localStorage.setItem('hangtime-records', JSON.stringify(records)); } catch (e) {}
+    const rec = { id: null, t: t };
+    records.push(rec);
     render();
+    if (user) {
+      // 로그인 상태: DB에 저장하고, 받은 id를 기록에 붙여요
+      const { data, error } = await db.from('hangtime_records').insert({ seconds: t }).select('id').single();
+      if (error) { msg('저장 실패: ' + error.message); records.pop(); render(); return; }
+      rec.id = data.id;
+    } else {
+      saveLocal();
+    }
   }
 
   function toggle() { running ? stop() : start(); }
 
   // ===== 표/통계/그래프를 다시 그리기 =====
   function render() {
-    // 통계: 평균, 최고, 횟수
-    $('num').textContent = records.length;
-    if (records.length) {
-      const sum = records.reduce((a, b) => a + b, 0);
-      $('avg').textContent = f2(sum / records.length);
-      $('best').textContent = f2(Math.max(...records));
+    const ts = records.map(r => r.t);
+    $('num').textContent = ts.length;
+    if (ts.length) {
+      $('avg').textContent = f2(ts.reduce((a, b) => a + b, 0) / ts.length);
+      $('best').textContent = f2(Math.max(...ts));
     } else {
       $('avg').textContent = '-';
       $('best').textContent = '-';
     }
-
-    // 표: 최근 기록이 위로 오게 뒤집어서 보여줘요
-    $('records').innerHTML = records.map((t, i) =>
-      '<tr><td>' + (i + 1) + '</td><td>' + f2(t) + '초</td><td>' + height(t).toFixed(1) + 'm</td>' +
+    $('records').innerHTML = records.map((r, i) =>
+      '<tr><td>' + (i + 1) + '</td><td>' + f2(r.t) + '초</td><td>' + height(r.t).toFixed(1) + 'm</td>' +
       '<td><button class="small" data-i="' + i + '">삭제</button></td></tr>'
     ).reverse().join('');
     $('empty').hidden = records.length > 0;
-
-    renderChart();
+    renderChart(ts);
   }
 
   // ===== 그래프: 회차별 체공시간 선 그래프 + 평균선 =====
-  function renderChart() {
+  function renderChart(ts) {
     const svg = $('chart');
-    if (records.length < 2) {
+    if (ts.length < 2) {
       svg.innerHTML = '<text x="150" y="80" text-anchor="middle" font-size="12" fill="#8a6d00">기록이 2개 이상이면 그래프가 나와요</text>';
       return;
     }
-    const min = Math.min(...records), max = Math.max(...records);
-    const span = (max - min) || 1;                       // 값이 모두 같을 때 0으로 나누는 것 방지
-    const avg = records.reduce((a, b) => a + b, 0) / records.length;
-    const y = v => 120 - ((v - min) / span) * 90;        // 값 → 세로 좌표
-    // 기록이 많으면 최근 20개만 그려요
-    const start = Math.max(0, records.length - 20);
-    const shown = records.slice(start);
+    const min = Math.min(...ts), max = Math.max(...ts);
+    const span = (max - min) || 1;
+    const avg = ts.reduce((a, b) => a + b, 0) / ts.length;
+    const y = v => 120 - ((v - min) / span) * 90;
+    const start = Math.max(0, ts.length - 20);
+    const shown = ts.slice(start);
     const pts = shown.map((v, i) => [30 + i * (250 / (shown.length - 1)), y(v)]);
-
     svg.innerHTML =
-      // 평균선 (점선)
       '<line x1="30" x2="280" y1="' + y(avg) + '" y2="' + y(avg) + '" stroke="#92400e" stroke-dasharray="4"/>' +
       '<text x="282" y="' + (y(avg) + 3) + '" font-size="8" fill="#92400e">평균</text>' +
       '<polyline points="' + pts.map(p => p.join(',')).join(' ') + '" fill="none" stroke="#d97706" stroke-width="2"/>' +
@@ -190,32 +257,52 @@
   }
 
   // ===== 버튼 연결 =====
-  // click 대신 pointerdown을 써서 "누르는 순간" 바로 반응하게 해요 (측정 지연 최소화)
   $('mainBtn').addEventListener('pointerdown', function (e) { e.preventDefault(); toggle(); });
+  $('loginBtn').onclick = signIn;
+  $('signupBtn').onclick = signUp;
+  $('logoutBtn').onclick = signOut;
 
-  // 스페이스바로도 시작/정지 (키를 꾹 눌렀을 때 반복 입력은 무시)
+  // 스페이스바로도 시작/정지 (입력칸에 글자를 쓰는 중에는 무시)
   document.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'INPUT') return;
     if (e.code === 'Space' && !e.repeat) { e.preventDefault(); toggle(); }
   });
 
-  // 표의 삭제 버튼 (표 전체에서 클릭을 한 번에 감지)
-  $('records').onclick = function (e) {
+  // 표의 삭제 버튼
+  $('records').onclick = async function (e) {
     if (e.target.dataset.i === undefined) return;
-    records.splice(Number(e.target.dataset.i), 1);
-    try { localStorage.setItem('hangtime-records', JSON.stringify(records)); } catch (err) {}
+    const i = Number(e.target.dataset.i);
+    const rec = records[i];
+    if (user && rec.id !== null) {
+      const { error } = await db.from('hangtime_records').delete().eq('id', rec.id);
+      if (error) return msg('삭제 실패: ' + error.message);
+    }
+    records.splice(i, 1);
+    if (!user) saveLocal();
     render();
   };
 
   // 전체 삭제
-  $('clearBtn').onclick = function () {
+  $('clearBtn').onclick = async function () {
     if (records.length && confirm('모든 기록을 지울까요?')) {
+      if (user) {
+        const { error } = await db.from('hangtime_records').delete().eq('user_id', user.id);
+        if (error) return msg('삭제 실패: ' + error.message);
+      }
       records = [];
-      try { localStorage.setItem('hangtime-records', JSON.stringify(records)); } catch (err) {}
+      if (!user) saveLocal();
       render();
     }
   };
 
-  render();   // 처음 열 때 저장된 기록을 화면에 그려요
+  // ===== 시작 =====
+  if (db) {
+    db.auth.onAuthStateChange((event, session) => { applyUser(session ? session.user : null); });
+  } else {
+    if (!keyReady) msg('※ Supabase 키 설정 전이라 이 기기에만 저장돼요');
+    loadLocal();
+    render();
+  }
 </script>
 </body>
 </html>
