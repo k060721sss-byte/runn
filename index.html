@@ -167,9 +167,9 @@
     $('authTitle').textContent = u ? '내 기록 (계정에 저장 중)' : '로그인하면 기록이 계정에 저장돼요';
     if (u) {
       $('whoami').textContent = u.email + ' 로 로그인됨';
-      const { data, error } = await db.from('hangtime_records').select('id, seconds').order('created_at', { ascending: true });
+      const { data, error } = await db.from('records').select('id, value').order('created_at', { ascending: true });
       if (error) { msg('기록 불러오기 실패: ' + error.message); records = []; }
-      else records = data.map(r => ({ id: r.id, t: Number(r.seconds) }));
+      else records = data.map(r => ({ id: r.id, t: Number(r.value) }));
     } else {
       loadLocal();
     }
@@ -202,7 +202,7 @@
     render();
     if (user) {
       // 로그인 상태: DB에 저장하고, 받은 id를 기록에 붙여요
-      const { data, error } = await db.from('hangtime_records').insert({ seconds: t }).select('id').single();
+      const { data, error } = await db.from('records').insert({ value: String(t) }).select('id').single();
       if (error) { msg('저장 실패: ' + error.message); records.pop(); render(); return; }
       rec.id = data.id;
     } else {
@@ -274,7 +274,7 @@
     const i = Number(e.target.dataset.i);
     const rec = records[i];
     if (user && rec.id !== null) {
-      const { error } = await db.from('hangtime_records').delete().eq('id', rec.id);
+      const { error } = await db.from('records').delete().eq('id', rec.id);
       if (error) return msg('삭제 실패: ' + error.message);
     }
     records.splice(i, 1);
@@ -286,7 +286,7 @@
   $('clearBtn').onclick = async function () {
     if (records.length && confirm('모든 기록을 지울까요?')) {
       if (user) {
-        const { error } = await db.from('hangtime_records').delete().eq('user_id', user.id);
+        const { error } = await db.from('records').delete().eq('user_id', user.id);
         if (error) return msg('삭제 실패: ' + error.message);
       }
       records = [];
